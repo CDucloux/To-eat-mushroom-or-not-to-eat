@@ -36,4 +36,11 @@ Nous avons découvert plusieurs phénomènes intéressants :
 
 L'ensemble du travail a été réalisé avec les librairies `tidymodels` et `doParallel`.
 
-
+[x] Linear Discriminant Analysis
+[x] Quadratic Discriminant Analysis
+[x] Linear Support Vector Machine
+[x] Logit
+[x] K-Nearest Neighbors
+[x] Decision Tree
+[x] Random Forest
+[x] XGboost
