@@ -1,0 +1,1168 @@
+---
+title: "<span style='color: #b29d41'>To eat mushroom </span> or <span style='color: #cc1516'>not to eat </span> ?"
+subtitle: "" 
+author: "Guillaume DEVANT & Corentin DUCLOUX"
+institute: <img src= univ-tours.png>
+format: 
+  revealjs:
+    slide-number: true
+    mermaid-format: png
+    chalkboard: true
+    transition: slide
+    background-transition: fade
+    theme: night
+    incremental: true   
+    footer: "--- Data Mining ---"
+    logo: mecen_transparent.png
+    controls : true
+    preview-links: auto
+    reference-location: document
+---
+
+## Problématique {background-color="black" background-image="mushrooms.jpg" background-opacity="0.3"}
+
+Le début de la cueillette aux champignons approche ! Mais... avec la cueillette vient toujours son lot d'`intoxications` !
+
+Nous allons donc tenter de répondre à cette question que se posent nos deux *"tontons cueilleurs"* : **to eat or not to eat ?**
+
+:::{.fragment .fade-in}
+
+<center>
+<img src="mushrooms_2.jpg"  width="350" height="250">
+<img src="mushrooms_3.jpg"  width="350" height="250">
+</center>
+
+:::
+
+# PARTIE I : Analyse Descriptive {background-color="black" background-image="stats.png" background-opacity="0.5"}
+
+## Type des variables{.smaller}
+
+```{r import_lib, echo=FALSE, message=FALSE,warning=FALSE}
+library(data.table)
+library(tidymodels)
+library(discrim)
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(tidyverse)
+library(kableExtra)
+library(DT)
+library(pROC)
+library(ggpubr)
+library(rpart)
+library(rsample)
+library(vip)
+library(rpart.plot)
+library(DataExplorer) # for missing values plot
+library(gridExtra)
+library(plotly)
+library(ggdark) # theme dark
+library(simputation) # impute NA
+library(kknn)
+library(doParallel)
+library(tictoc)
+library(stargazer)
+
+#devtools::install_github("nsgrantham/ggdark")
+#devtools::install_github("collectivemedia/tictoc")
+```
+
+```{r colors, echo = FALSE}
+red_mushroom <- "#cc1516"
+brown_mushroom <- "#b29d41"
+purple_mushroom <- "#794482"
+yellow_mushroom <- "#d4c381"
+  
+col_bp <- c(brown_mushroom, red_mushroom)
+```
+
+```{r desc_functions, echo=FALSE}
+
+transform_data <- function(df, var_name) {
+  freq_table <- table(df[[var_name]], df$class)
+  prop_table <- prop.table(freq_table, margin = 1)
+  df_prop_table <- as.data.frame(prop_table)
+  df_prop_table <- na.omit(df_prop_table)
+  df_prop_table$class <- rownames(df_prop_table)
+  colnames(df_prop_table) <- c(var_name, "class", "proportion")
+  
+  ggplot(df_prop_table, aes(x = df_prop_table[,1], y = proportion, fill = class)) +
+    geom_bar(position = "fill", stat = "identity", alpha = 0.75) +
+    labs(x = "", y = "Proportion", title = paste("Variable :", var_name)) + 
+    scale_fill_manual(values = col_bp) + 
+    coord_flip() + dark_mode(theme_minimal())
+}
+
+plot_factors <- function(df, factors) {
+  plot_list <- list()
+  
+  for (var in factors) {
+    plot_list[[var]] <- transform_data(df, var)
+  }
+  
+  n_plots <- length(factors)
+  n_cols <- ifelse(n_plots %% 2 == 0, 2, 1)
+  n_rows <- ceiling(n_plots / n_cols)
+  ggarrange(plotlist = plot_list, ncol = n_cols, nrow = n_rows)
+}
+
+moy.test.auto.var <- function(x, y,...){
+  var_value <- var.test(x,y)$p.value > 0.05
+  test <- t.test(x,y, var.equal = var_value)
+  output <- c(test$estimate, test$conf.int[1], test$conf.int[2], test$p.value)
+  names(output) <- c("$\\mu_{e}$","$\\mu_{p}$","IC inf à 95%",
+                     "IC sup à 95%", "$p-value$")
+  return(output)
+}
+
+cv <- function(x, y) {
+      t <- table(x, y)
+      chi <- suppressWarnings(chisq.test(t))$statistic
+      cramer <- sqrt(chi / (length(x) * (min(dim(t)) - 1)))
+      cramer
+}
+
+cramer.matrix <- function(y, fill = TRUE){
+      col.y <- ncol(y)
+      V <- matrix(ncol = col.y, nrow = col.y)
+      for(i in 1:(col.y - 1)){
+            for(j in (i + 1):col.y){
+                  V[i,j] <- cv(pull(y,i), pull(y,j))
+            }
+      }
+      diag(V) <- 1 
+      if (fill) {
+            for (i in 1:ncol(V)) {
+                  V[, i] <- V[i, ]
+            }
+      }
+      colnames(V) <- names(y)
+      rownames(V) <- names(y)
+      V
+}
+```
+
+```{r ml_functions, echo = FALSE}
+Collect <- function(x){
+  last_fit(x, split = df_split) |> collect_predictions()
+}
+
+auc <- function(x){
+  metric <- last_fit(x, split = df_split) |> collect_metrics()
+  auc <- metric$.estimate[2]
+  auc
+}
+
+global_error <- function(tab){
+  error <- (tab$table[1,2] + tab$table[2,1])/ sum(tab$table)
+  error
+}
+
+global_accuracy <- function(tab){
+  acc <- (tab$table[1,1] + tab$table[2,2]) / sum(tab$table)
+  acc
+}
+
+true_edible_rate <- function(tab){
+  ter <- tab$table[1,1] / sum(tab$table[1,])
+  ter
+}
+
+true_poisonous_rate <- function(tab){
+  tpr <- tab$table[2,2] / sum(tab$table[2,])
+  tpr
+}
+
+precision_edible <- function(tab){
+  pe <- tab$table[1,1] / (tab$table[1,1] + tab$table[2,1])
+  pe
+}
+
+precision_poisonous <- function(tab){
+  pp <- tab$table[2,2] / (tab$table[2,2] + tab$table[1,2])
+  pp
+}
+
+F1_Score <- function(tab){
+  precision <- tab$table[1]/(tab$table[1]+tab$table[2])
+  rappel <- tab$table[1]/(tab$table[1]+tab$table[3])
+
+   2*(precision*rappel)/(precision+rappel)
+}
+
+# cutoff 
+select_threshold <- function(model, threshold){
+  model$.pred_class <- as.factor(
+  case_when(
+    model$.pred_p > threshold ~ "p",
+    model$.pred_p <= threshold ~ "e"
+    )
+  )
+  model
+}
+
+confusion_matrix <- function(model_res){
+  tab_model <- model_res |>
+    conf_mat(estimate = .pred_class, truth = class)
+  
+  conf_matrix_df <- as.data.frame(tab_model$table)
+  colnames(conf_matrix_df) <- c("Prédiction","Réalité","Observations")
+  
+  p <- ggplot(conf_matrix_df, aes(Prédiction, Réalité, fill = Observations)) +
+  geom_tile() +
+  geom_text(aes(label = Observations)) +
+  scale_fill_gradient(low = yellow_mushroom, high = purple_mushroom) +
+  labs(x = "Réalité", y = "Prédiction") + ggtitle("Matrice de confusion") +
+  theme(legend.position = "none") +
+  dark_mode(theme_minimal())
+  
+  p
+}
+
+roc_curve <- function(model_res, model_wf){
+  roc_obj <- roc(model_res$class, model_res$.pred_p)
+
+  ggplot_roc <- ggroc(roc_obj, col = yellow_mushroom) +
+    geom_abline(slope = 1, intercept = 1, linetype = "dashed") +
+    ggtitle(paste("Courbe ROC - AUC :", round(auc(model_wf),2))) + labs(x = "FPR", y ="TPR") + dark_mode(theme_minimal())
+  
+  ggplot_roc
+  
+}
+
+```
+
+```{r import_data,echo=FALSE}
+
+chemin_g <- "C:/Users/guill/OneDrive - Université de Tours/Bureau/Data Mining/Projet/MushroomDataset/secondary_data.csv"
+
+chemin_c <- "C:/Users/tcrsm/Documents/R data/champignons.csv"
+
+df_1 <- fread(chemin_c, stringsAsFactors = T)
+
+class_df_1 <- cbind(Variables = colnames(df_1),
+                  Type = unlist(unname(lapply(df_1, class))))
+
+names(df_1) <- gsub("-", "_", names(df_1))
+```
+:::: {.columns}
+::: {.column width="50%"}
+
+::: {.fragment .highlight-green}
+**class** $\Rightarrow$ *factor*
+:::
+
+**cap-diameter** $\Rightarrow$ *numeric*
+
+**cap-shape** $\Rightarrow$ *factor*
+
+**cap-surface** $\Rightarrow$ *factor*
+
+**cap-color** $\Rightarrow$ *factor*
+
+**does-bruises-or-bleed** $\Rightarrow$ *factor*
+
+**gill-attachment** $\Rightarrow$ *factor*
+
+**gill-spacing** $\Rightarrow$ *factor*
+
+**gill-color** $\Rightarrow$ *factor*
+
+**stem-height** $\Rightarrow$ *numeric*
+
+**stem-width** $\Rightarrow$ *numeric*
+
+:::
+
+::: {.column width="50%"}
+
+**stem-color** $\Rightarrow$ *factor*
+
+**has-ring** $\Rightarrow$ *factor*
+
+**ring-type** $\Rightarrow$ *factor*
+
+**habitat** $\Rightarrow$ *factor*
+
+**season** $\Rightarrow$ *factor*
+
+::: {.fragment .strike .highlight-red}
+**veil-type** $\Rightarrow$ *factor*
+
+**veil-color** $\Rightarrow$ *factor*
+
+**stem-root** $\Rightarrow$ *factor*
+
+**stem-surface** $\Rightarrow$ *factor*
+
+**spore-print-color** $\Rightarrow$ *factor*
+:::
+
+:::
+::::
+
+
+## Données manquantes {.smaller}
+
+```{r change_na,echo=TRUE}
+df_1 <- df_1 |> 
+  mutate_all(~na_if(., ""))
+```
+
+```{r param_plot,echo=FALSE,include=FALSE}
+p1 <- plot_missing(df_1, ggtheme = theme_minimal()) +
+  scale_x_discrete(name = "Variables") + ggtitle("Exploration des valeurs manquantes")
+```
+
+```{r plot_na,echo=FALSE}
+p1 + dark_mode(theme_minimal()) + scale_fill_discrete(name = "Qualité :")
+```
+
+## Variables qualitatives {.smaller .scrollable}
+
+La commande `df_1 |> select_if(~(mean(is.na(.)) < 0.5))` permet de retirer les variables contenant plus de 50% de valeurs manquantes car inexploitables.
+
+<hr>
+
+On procède ensuite à une analyse de la proportion des modalités par *variable* et par *classe* (comestible ou non) afin de déterminer si certaines modalités sont très associées à la classe **comestible** ou **non-comestible**.
+
+```{r class_var}
+df_clean <- df_1 |>
+  select_if(~(mean(is.na(.)) < 0.5))
+
+rm(df_1)
+
+factor_vars <- names(df_clean)[sapply(df_clean, is.factor) & names(df_clean) != "class"]
+
+plot_factors(df_clean, factor_vars[1:4]) + dark_mode(theme_minimal())
+plot_factors(df_clean, factor_vars[5:8]) + dark_mode(theme_minimal())
+plot_factors(df_clean, factor_vars[9:12]) + dark_mode(theme_minimal())
+```
+
+## Variables quantitatives {.smaller}
+
+On cherche à savoir si les moyennes sont significativement différentes selon le groupe **edible** et le groupe **poisonous** pour les *3* variables quantitatives, on peut donc utiliser un $t-test$ :
+
+$\begin{cases} H_0: \mu_e = \mu_p \\H_1:\mu_e \ne \mu_p \end{cases}$ | Au risque $\alpha = 5 \%$, on a une $p−value<0.05$
+
+On rejette $H_0 \Rightarrow$ Les moyennes sont `significativement différentes` !
+
+<hr>
+
+:::: {.columns}
+::: {.column width="33%"}
+```{r mean_test_1, echo=FALSE}
+test_moy_1 <- round(moy.test.auto.var(
+  df_clean$cap_diameter[df_clean$class == "e"],
+  df_clean$cap_diameter[df_clean$class == "p"]
+  ),2)
+
+test_moy_1 |> kable(col.names = "", caption = "**CAP_DIAMETER**", format = "markdown")
+```
+:::
+
+::: {.column width="33%"}
+```{r mean_test_2, echo=FALSE}
+test_moy_2 <- round(moy.test.auto.var(
+  df_clean$stem_height[df_clean$class == "e"],
+  df_clean$stem_height[df_clean$class == "p"]
+  ),2)
+
+test_moy_2 |> kable(col.names = "", caption = "**STEM_HEIGHT**", format = "markdown")
+```
+:::
+
+::: {.column width="33%"}
+```{r mean_test_3, echo=FALSE}
+test_moy_3 <- round(moy.test.auto.var(
+  df_clean$stem_width[df_clean$class == "e"],
+  df_clean$stem_width[df_clean$class == "p"]
+  ),2)
+
+test_moy_3 |> kable(col.names = "", caption = "**STEM_WIDTH**", format = "markdown")
+```
+:::
+::::
+
+# PARTIE II : En cuisine {background-color="black" background-image="recipe.jpg" background-opacity="0.5"}
+
+## Imputation des NA{.smaller .scrollable}
+
+:::{.callout-warning}
+## Traitement des données manquantes :
+
+Avant de commencer à utiliser des modèles, on impute les données manquantes des variables restantes (`r round((sum(is.na(df_clean))/(length(df_clean)*nrow(df_clean)))*100,2)`% de données manquantes au total) avec la librairie `simputation` à l'aide de l'algorithme $\text{CART}$. 
+
+On vérifie aussi que la distribution des modalités par variable n'a pas trop changé.
+:::
+
+```{r na, echo=TRUE}
+df_superclean <- df_clean
+
+df_superclean <- impute_cart(df_superclean, gill_spacing ~.)
+df_superclean <- impute_cart(df_superclean, cap_surface ~.)
+df_superclean <- impute_cart(df_superclean, gill_attachment ~.)
+df_superclean <- impute_cart(df_superclean, ring_type ~.)
+```
+
+
+```{r na_2}
+ggarrange(
+  ggplot(df_clean, aes(x = gill_spacing)) + 
+    geom_bar(fill = yellow_mushroom, alpha = 0.5) +
+    ggtitle("Pré-imputation") +
+    dark_mode(theme_minimal()),
+  ggplot(df_superclean, aes(x = gill_spacing)) +
+    geom_bar(fill = "white", alpha = 0.5) +
+    ggtitle("Post-imputation") +
+    dark_mode(theme_minimal())
+)
+
+ggarrange(
+  ggplot(df_clean, aes(x = cap_surface)) + 
+    geom_bar(fill = yellow_mushroom, alpha = 0.5) +
+    ggtitle("Pré-imputation") +
+    dark_mode(theme_minimal()),
+  ggplot(df_superclean, aes(x = cap_surface)) +
+    geom_bar(fill = "white", alpha = 0.5) +
+    ggtitle("Post-imputation") +
+    dark_mode(theme_minimal())
+)
+
+ggarrange(
+  ggplot(df_clean, aes(x = gill_attachment)) + 
+    geom_bar(fill = yellow_mushroom, alpha = 0.5) +
+    ggtitle("Pré-imputation") +
+    dark_mode(theme_minimal()),
+  ggplot(df_superclean, aes(x = gill_attachment)) +
+    geom_bar(fill = "white", alpha = 0.5) +
+    ggtitle("Post-imputation") +
+    dark_mode(theme_minimal())
+)
+
+ggarrange(
+  ggplot(df_clean, aes(x = ring_type)) + 
+    geom_bar(fill = yellow_mushroom, alpha = 0.5) +
+    ggtitle("Pré-imputation") +
+    dark_mode(theme_minimal()),
+  ggplot(df_superclean, aes(x = ring_type)) +
+    geom_bar(fill = "white", alpha = 0.5) +
+    ggtitle("Post-imputation") +
+    dark_mode(theme_minimal())
+)
+
+rm(df_clean)
+```
+
+## Découpage `train/test` {.smaller}
+
+Nous avons choisi une valeur de découpage classique : $\dfrac{2}{3}$
+
+```{r split, echo = TRUE}
+
+## A RETIRER ! juste pour compiler
+#df_superclean <- df_superclean[sample(nrow(df_superclean), 7000), ]
+data_prop <- 2/3
+df_split <- df_superclean |> initial_split(prop = data_prop)
+df_test <- df_split |> testing()
+df_train <- df_split |> training()
+```
+
+<hr>
+
+Le dataset contenant `r nrow(df_superclean)` observations, nous allons aussi utiliser la librairie `doParallel` pour accélérer le temps de calcul avec du *parallel processing* dans la recherche des meilleurs hyperparamètres.
+
+## Spécification des modèles {.smaller}
+
+Tous les algorithmes présentés ne sont pas en mesure de prendre en charge les variables qualitatives, il convient donc d'adapter les *recettes* de spécification selon les modèles !
+
+:::: {.columns}
+::: {.column width="60%"}
+> La variable à prédire est `class` et possède les caractéristiques suivantes :
+:::
+
+::: {.column width="40%"}
+```{r class_table}
+dplyr::count(df_superclean, class) |> kable(format="markdown", col.names = c("**class**","$n$"))
+```
+:::
+::::
+
+<hr>
+
+- `df_recipe_numeric` prédit la classe du champignon uniquement selon les 3 variables numériques du dataset
+- `df_recipe_mixt` prédit la classe du champignon avec toutes les variables disponibles **NON-COLINEAIRES**
+
+- `df_recipe_qda` prédit la classse du champignon avec les variables disponibles dans `df_recipee_mixt` - 2 variables
+
+```{r recipes}
+df_recipe_numeric <- df_train |>  recipe(class ~ cap_diameter + stem_height + stem_width, data = df_train) |> 
+  step_scale(cap_diameter, stem_height, stem_width) |> 
+  step_center(cap_diameter, stem_height, stem_width) |> 
+  prep()
+
+df_recipe_mixt <- df_train |>  recipe(class ~ cap_diameter + cap_color + does_bruise_or_bleed + gill_color + stem_height + stem_width + stem_color + has_ring + habitat + season, data = df_train) |>
+  step_scale(all_numeric()) |> 
+  step_center(all_numeric()) |> 
+  step_dummy(all_nominal(), -all_outcomes()) |> 
+  prep()
+
+# regarder all_logical, à voir ! prep |> juice() pour voir les données d'entrainement
+
+df_recipe_qda <- df_train |>  recipe(class ~ cap_diameter + cap_color + does_bruise_or_bleed + gill_color + stem_height + stem_width + has_ring + season, data = df_train) |>
+  step_scale(all_numeric()) |> 
+  step_center(all_numeric()) |> 
+  step_dummy(all_nominal(), -all_outcomes()) |> 
+  prep()
+
+```
+
+# LDA {background-color="black" background-image="lda.png" background-opacity="0.5"}
+
+## Matrice de confusion {.smaller}
+
+```{r lda_mod_wf}
+lda_mod <- discrim_linear() |> 
+  set_mode("classification") |> 
+  set_engine("MASS")
+  
+lda_wf <- workflow() |> 
+  add_model(lda_mod) |> 
+  add_recipe(df_recipe_mixt)
+
+lda_res <- Collect(lda_wf)
+
+tab_lda <- lda_res |>
+  conf_mat(estimate = .pred_class, truth = class)
+
+lda_fit <- last_fit(lda_wf, split = df_split) 
+
+LD <- lda_fit$.workflow[[1]]$fit$fit$fit$scaling
+```
+
+```{r lda_matconf_1}
+confusion_matrix(model_res = lda_res)
+```
+
+## Mesures de performance {.smaller}
+
+> Indicateurs :
+
+<hr>
+
+- **Accuracy** - $GA$ : `r round(global_accuracy(tab_lda)*100,2)` %
+- **Erreur globale de classement** - $GE$ : `r round(global_error(tab_lda)*100,2)` %
+
+- **Taux de vrais comestibles** - $TER$ : `r round(true_edible_rate(tab_lda)*100,2)` %
+- **Taux de vrais toxiques** - $TPR$ : `r round(true_poisonous_rate(tab_lda)*100,2)` %
+
+- **Précision** - $P_e$ : `r round(precision_edible(tab_lda)*100,2)` %
+
+## Courbe ROC
+
+```{r roc_lda}
+roc_curve(lda_res, lda_wf)
+```
+
+# QDA {background-color="black" background-image="qda.png" background-opacity="0.5"}
+
+## Matrice de confusion {.smaller}
+
+```{r qda_mod_wf}
+qda_mod <- discrim_quad() |> 
+  set_mode("classification") |> 
+  set_engine("MASS")
+  
+qda_wf <- workflow() |> 
+  add_model(qda_mod) |> 
+  add_recipe(df_recipe_qda)
+
+qda_res <- Collect(qda_wf)
+
+tab_qda <- qda_res |>
+  conf_mat(estimate = .pred_class, truth = class)
+```
+
+```{r qda_matconf_1}
+confusion_matrix(model_res = qda_res)
+```
+
+## Mesures de performance {.smaller}
+
+> Indicateurs :
+
+<hr>
+
+- **Accuracy** - $GA$ : `r round(global_accuracy(tab_qda)*100,2)` %
+- **Erreur globale de classement** - $GE$ : `r round(global_error(tab_qda)*100,2)` %
+
+- **Taux de vrais comestibles** - $TER$ : `r round(true_edible_rate(tab_qda)*100,2)` %
+- **Taux de vrais toxiques** - $TPR$ : `r round(true_poisonous_rate(tab_qda)*100,2)` %
+
+- **Précision** - $P_e$ : `r round(precision_edible(tab_qda)*100,2)` %
+
+## Courbe ROC
+
+```{r roc_qda}
+roc_curve(qda_res, qda_wf)
+```
+
+# LINEAR SVM {background-color="black" background-image="svm.jpg" background-opacity="0.5"}
+
+## Optimisation des paramètres
+
+```{r svm_lin_mod_wf}
+svm_lin_mod <- svm_linear() |> 
+  set_mode("classification") |> 
+  set_engine("kernlab")
+
+svm_lin_wf <- workflow() |> 
+  add_model(svm_lin_mod |>  set_args(cost = tune())) |> 
+  add_recipe(df_recipe_numeric)
+```
+
+```{r svm_lin_cv}
+n_cores <- parallel::detectCores(logical = TRUE)
+registerDoParallel(cores = n_cores - 1)
+  
+df_folds <- vfold_cv(df_train, v = 5, strata = class)
+svm_lin_grid <- svm_lin_wf |>  grid_regular(levels=5)
+
+tic("linear svm model tuning")
+tune_res_svm_lin <- tune_grid(svm_lin_wf, resamples = df_folds, grid = svm_lin_grid)
+toc()
+ 
+stopImplicitCluster()
+ 
+autoplot(tune_res_svm_lin) + dark_mode(theme_minimal())
+```
+
+```{r svm_lin_perf}
+svm_lin_best <- tune_res_svm_lin |> select_best(metric = "accuracy")
+ 
+svm_lin_final_wf <- svm_lin_wf |>
+  finalize_workflow(svm_lin_best)
+  
+svm_lin_res <- Collect(svm_lin_final_wf)
+```
+
+## Matrice de confusion {.smaller}
+
+```{r svm_matconf}
+tab_svm_lin <- svm_lin_res |>
+  conf_mat(estimate = .pred_class, truth = class)
+ 
+confusion_matrix(model_res = svm_lin_res)
+```
+
+## Mesures de performance {.smaller}
+
+> Indicateurs :
+
+<hr>
+
+- **Accuracy** - $GA$ : `r round(global_accuracy(tab_svm_lin)*100,2)` %
+- **Erreur globale de classement** - $GE$ : `r round(global_error(tab_svm_lin)*100,2)` %
+
+- **Taux de vrais comestibles** - $TER$ : `r round(true_edible_rate(tab_svm_lin)*100,2)` %
+- **Taux de vrais toxiques** - $TPR$ : `r round(true_poisonous_rate(tab_svm_lin)*100,2)` %
+
+- **Précision** - $P_e$ : `r round(precision_edible(tab_svm_lin)*100,2)` %
+
+## Courbe ROC
+
+```{r roc_svm}
+roc_curve(svm_lin_res, svm_lin_final_wf)
+```
+
+# LOGISTIC REGRESSION {background-color="black" background-image="logit.png" background-opacity="0.5"}
+
+## Matrice de confusion {.smaller}
+
+```{r logit_mod_wf}
+logit_mod <- logistic_reg() |>  
+  set_mode("classification") |> 
+  set_engine("glm")
+
+logit_wf <- workflow() |> 
+  add_model(logit_mod) |> 
+  add_recipe(df_recipe_mixt)
+
+logit_res <- Collect(logit_wf)
+
+tab_logit <- logit_res |>
+  conf_mat(estimate = .pred_class, truth = class)
+```
+
+```{r logit_matconf_1}
+confusion_matrix(model_res = logit_res)
+```
+
+## Odd Ratios {.smaller}
+
+```{r logit_fit}
+logit_fit <- last_fit(logit_wf, split = df_split) 
+
+logit_coefs <- tidy(logit_fit$.workflow[[1]])
+
+significative_coefs <- logit_coefs[logit_coefs$p.value < 0.05,]
+
+odds_ratio <- cbind(significative_coefs$term,round(exp(significative_coefs$estimate),3))
+
+colnames(odds_ratio) <- c("Variables","Odds Ratios (p<0.05)")
+
+datatable(odds_ratio, options = list(
+  scrollX = TRUE,
+  scrollCollapse = TRUE,
+  language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/French.json'),
+  autoWidth = FALSE, 
+  pageLength = 5,
+  initComplete = JS(
+    "function(settings, json) {",
+    "$(this.api().table().header()).css({'background-color': 'black', 'color': 'white'});",
+    "$(this.api().table().rows()).css({'color': 'white'});",
+    "}")),
+  
+  caption = htmltools::tags$caption(
+    style = 'caption-side: bottom; text-align: center;',
+    'Tableau : ', htmltools::em("Odd RATIOS")
+  )
+)
+
+# modalité de référence de cap_color = b (beige)
+```
+
+## Mesures de performance {.smaller}
+
+> Indicateurs :
+
+<hr>
+
+- **Accuracy** - $GA$ : `r round(global_accuracy(tab_logit)*100,2)` %
+- **Erreur globale de classement** - $GE$ : `r round(global_error(tab_logit)*100,2)` %
+
+- **Taux de vrais comestibles** - $TER$ : `r round(true_edible_rate(tab_logit)*100,2)` %
+- **Taux de vrais toxiques** - $TPR$ : `r round(true_poisonous_rate(tab_logit)*100,2)` %
+
+- **Précision** - $P_e$ : `r round(precision_edible(tab_logit)*100,2)` %
+
+## Courbe ROC
+
+```{r roc_logit}
+roc_curve(logit_res, logit_wf)
+```
+
+# KNN {background-color="black" background-image="knn.png" background-opacity="0.5"}
+
+## Optimisation des paramètres {.smaller}
+
+Pour trouver le nombre optimal de $k-$plus proches voisins, on utilise une $\text{Cross Validation}$ à 5 blocs $\Rightarrow$ on obtient aussi une estimation plus robuste du biais et de la variance pour le modèle.
+
+```{r knn_mod_wf}
+knn_mod <- nearest_neighbor() |> 
+  set_mode("classification") |> 
+  set_engine("kknn") |> 
+  set_args(neighbors = tune())
+  
+knn_wf <- workflow() |>
+  add_model(knn_mod) |> 
+  add_recipe(df_recipe_numeric)
+```
+
+```{r knn_cv}
+n_cores <- parallel::detectCores(logical = TRUE)
+registerDoParallel(cores = n_cores - 1)
+
+df_folds <- vfold_cv(df_train, v = 5, strata = class)
+knn_grid <- grid_regular(neighbors(), levels = 10)
+
+tic("knn model tuning")
+tune_res_knn <- tune_grid(knn_wf, resamples = df_folds, grid = knn_grid)
+toc()
+
+stopImplicitCluster()
+
+autoplot(tune_res_knn) +
+    dark_mode(theme_minimal())
+```
+
+```{r knn_perf}
+knn_best <- tune_res_knn |> select_best(metric = "accuracy")
+
+knn_final_wf <- knn_wf |>
+  finalize_workflow(knn_best)
+
+knn_res <- Collect(knn_final_wf)
+
+knn_res_seuil <- select_threshold(knn_res, 0.3)
+
+tab_knn <- knn_res |>
+  conf_mat(estimate = .pred_class, truth = class)
+```
+
+On choisit $k =$ **`r knn_best$neighbors`** - plus proches voisins.
+
+## Matrice de confusion {.smaller}
+
+```{r knn_matconf_1}
+confusion_matrix(model_res = knn_res)
+```
+
+## Mesures de performance {.smaller}
+
+> Indicateurs :
+
+<hr>
+
+- **Accuracy** - $GA$ : `r round(global_accuracy(tab_knn)*100,2)` %
+- **Erreur globale de classement** - $GE$ : `r round(global_error(tab_knn)*100,2)` %
+
+- **Taux de vrais comestibles** - $TER$ : `r round(true_edible_rate(tab_knn)*100,2)` %
+- **Taux de vrais toxiques** - $TPR$ : `r round(true_poisonous_rate(tab_knn)*100,2)` %
+
+- **Précision** - $P_e$ : `r round(precision_edible(tab_knn)*100,2)` %
+
+## Courbe ROC
+
+```{r roc_knn}
+roc_curve(knn_res, knn_final_wf)
+```
+
+# DECISION TREE {background-color="black" background-image="tree.png" background-opacity="0.5"}
+
+## Optimisation des paramètres {.smaller}
+
+Pour trouver le paramètre optimal de **cost complexity** - $γ$, on utilise une $\text{Cross Validation}$ à 5 plis $\Rightarrow$ Le paramètre $γ$ permet ici un compromis entre la complexité du sous-arbre et son adéquation aux données d'entraînement.
+
+```{r tree_mod_wf}
+tree_mod <- decision_tree() |> 
+  set_engine("rpart") |>  
+  set_mode("classification") |> 
+  set_args(cost_complexity = tune(),
+           tree_depth = tune())
+
+tree_wf <- workflow() |>  
+  add_model(tree_mod) |> 
+  add_recipe(df_recipe_mixt)
+```
+
+```{r tree_cv}
+n_cores <- parallel::detectCores(logical = TRUE)
+registerDoParallel(cores = n_cores - 1)
+
+tree_grid <- grid_regular(cost_complexity(range = c(-5,-0.1)), tree_depth(), levels = 4)
+
+tic("decision tree model tuning")
+
+tune_res_tree <- tune_grid(tree_wf,
+  resamples = df_folds,
+  grid = tree_grid,
+  metrics = metric_set(accuracy)
+)
+
+toc()
+
+stopImplicitCluster()
+
+autoplot(tune_res_tree) + dark_mode(theme_minimal())
+```
+
+```{r tree_perf}
+tree_best <- tune_res_tree |> select_best(metric = "accuracy")
+
+tree_final_wf <- tree_wf |>
+  finalize_workflow(tree_best)
+
+tree_res <- Collect(tree_final_wf)
+
+tree_fit <- tree_final_wf |> last_fit(df_split)
+
+cp_tree <- round(tree_best$cost_complexity,5)
+```
+
+On obtient un paramètre $γ$ optimal de : **`r format(cp_tree, scientific = FALSE)`** et une profondeur de **`r tree_best$tree_depth`**.
+
+## Visualisation de l'arbre obtenu {.smaller}
+
+```{r tree_fit}
+tree_fit |>  
+  extract_fit_engine() |>  
+  rpart.plot::prp(type = 0, extra = 1, split.box.col = yellow_mushroom,
+                  roundint = FALSE)
+```
+
+## Matrice de confusion {.smaller}
+
+```{r tree_matconf}
+tab_tree <- tree_res |>
+  conf_mat(estimate = .pred_class, truth = class)
+
+confusion_matrix(model_res = tree_res)
+```
+
+## Mesures de performance {.smaller}
+
+> Indicateurs :
+
+<hr>
+
+- **Accuracy** - $GA$ : `r round(global_accuracy(tab_tree)*100,2)` %
+- **Erreur globale de classement** - $GE$ : `r round(global_error(tab_tree)*100,2)` %
+
+- **Taux de vrais comestibles** - $TER$ : `r round(true_edible_rate(tab_tree)*100,2)` %
+- **Taux de vrais toxiques** - $TPR$ : `r round(true_poisonous_rate(tab_tree)*100,2)` %
+
+- **Précision** - $P_e$ : `r round(precision_edible(tab_tree)*100,2)` %
+
+## Courbe ROC
+
+```{r roc_tree}
+roc_curve(tree_res, tree_final_wf)
+```
+
+# RANDOM FOREST {background-color="black" background-image="random_forest.jpg" background-opacity="0.5"}
+
+## Optimisation des paramètres {.smaller}
+
+```{r rf_mod_wf}
+rf_mod <- rand_forest() |> 
+  set_engine("ranger", importance = "impurity") |> 
+  set_mode("classification") |> 
+  set_args(mtry = tune(), trees = tune())
+
+rf_wf <- workflow() |>  
+  add_model(rf_mod) |> 
+  add_recipe(df_recipe_mixt)
+```
+
+```{r rf_cv}
+n_cores <- parallel::detectCores(logical = TRUE)
+registerDoParallel(cores = n_cores - 1)
+
+rf_params <- extract_parameter_set_dials(rf_wf) |>  
+  update(mtry = mtry(c(1,5)), trees = trees(c(50,500)))
+
+rf_grid <- grid_regular(rf_params, levels = c(mtry = 5, trees = 3))
+
+tic("random forest model tuning")
+
+tune_res_rf <- tune_grid(rf_wf,
+  resamples = df_folds,
+  grid = rf_grid,
+  metrics = metric_set(accuracy)
+)
+
+
+toc()
+
+stopImplicitCluster()
+
+autoplot(tune_res_rf) + dark_mode(theme_minimal())
+```
+
+```{r rf_perf}
+rf_best <- tune_res_rf |> select_best(metric = "accuracy")
+
+rf_final_wf <- rf_wf |>
+  finalize_workflow(rf_best)
+
+rf_res <- Collect(rf_final_wf)
+```
+
+Meilleurs hyperparamètres : **ntrees = `r rf_best$trees`** & **mtry = `r rf_best$mtry`**.
+
+## Importance des variables
+
+```{r rf_importance}
+rf_importance <- last_fit(rf_final_wf, split = df_split)
+
+extract_fit_parsnip(rf_importance$.workflow[[1]]) |>
+  vip(num_features = 20) +
+  ggtitle("Importance des variables") +
+  dark_mode(theme_minimal())
+```
+
+
+## Matrice de confusion {.smaller}
+
+```{r rf_matconf}
+tab_rf <- rf_res |>
+  conf_mat(estimate = .pred_class, truth = class)
+
+confusion_matrix(model_res = rf_res)
+```
+
+## Mesures de performance {.smaller}
+
+> Indicateurs :
+
+<hr>
+
+- **Accuracy** - $GA$ : `r round(global_accuracy(tab_rf)*100,2)` %
+- **Erreur globale de classement** - $GE$ : `r round(global_error(tab_rf)*100,2)` %
+
+- **Taux de vrais comestibles** - $TER$ : `r round(true_edible_rate(tab_rf)*100,2)` %
+- **Taux de vrais toxiques** - $TPR$ : `r round(true_poisonous_rate(tab_rf)*100,2)` %
+
+- **Précision** - $P_e$ : `r round(precision_edible(tab_rf)*100,2)` %
+
+## Courbe ROC
+
+```{r roc_rf}
+roc_curve(rf_res, rf_final_wf)
+```
+
+# BOOSTING {background-color="black" background-image="boosting.jpg" background-opacity="0.5"}
+
+## Optimisation des paramètres {.smaller}
+
+```{r boost_mod_wf}
+boost_mod <- boost_tree() |>  
+  set_engine("xgboost") |>  
+  set_mode("classification") |> 
+  set_args(trees = tune(), tree_depth = tune(), learn_rate = tune())
+
+boost_wf <- workflow() |>  
+  add_model(boost_mod) |> 
+  add_recipe(df_recipe_mixt)
+```
+
+```{r boost_cv}
+n_cores <- parallel::detectCores(logical = TRUE)
+registerDoParallel(cores = n_cores - 1)
+
+boost_grid <- grid_regular(extract_parameter_set_dials(boost_wf), levels = 3)
+
+tic("boosting model tuning")
+
+tune_res_boost <- tune_grid(boost_wf,
+    resamples = df_folds, 
+    grid = boost_grid,
+    metrics = metric_set(accuracy)
+  )
+
+toc()
+
+stopImplicitCluster()
+
+autoplot(tune_res_boost) + dark_mode(theme_minimal())
+```
+
+```{r boost_perf}
+boost_best <- tune_res_boost |> select_best(metric = "accuracy")
+
+boost_final_wf <- boost_wf |>
+  finalize_workflow(boost_best)
+
+boost_res <- Collect(boost_final_wf)
+```
+
+Meilleurs hyperparamètres : **ntrees = `r boost_best$trees`**, **depth = `r boost_best$tree_depth`** & $\lambda =$ **`r boost_best$learn_rate`**.
+
+## Matrice de confusion {.smaller}
+
+```{r boost_matconf}
+tab_boost <- boost_res |>
+  conf_mat(estimate = .pred_class, truth = class)
+
+confusion_matrix(model_res = boost_res)
+```
+
+## Mesures de performance {.smaller}
+
+> Indicateurs :
+
+<hr>
+
+- **Accuracy** - $GA$ : `r round(global_accuracy(tab_boost)*100,2)` %
+- **Erreur globale de classement** - $GE$ : `r round(global_error(tab_boost)*100,2)` %
+
+- **Taux de vrais comestibles** - $TER$ : `r round(true_edible_rate(tab_boost)*100,2)` %
+- **Taux de vrais toxiques** - $TPR$ : `r round(true_poisonous_rate(tab_boost)*100,2)` %
+
+- **Précision** - $P_e$ : `r round(precision_edible(tab_boost)*100,2)` %
+
+## Courbe ROC
+
+```{r roc_boost}
+roc_curve(boost_res, boost_final_wf)
+```
+
+# PARTIE III : The TOP Model {background-color="black" background-image="strong_dog.jpg" background-opacity="0.5"}
+
+## Comparaison de tous les modèles {.smaller}
+
+```{r all_roc}
+roc_knn <- roc(knn_res$class, knn_res$.pred_p)
+roc_lda <- roc(lda_res$class, lda_res$.pred_p)
+roc_qda <- roc(qda_res$class, qda_res$.pred_p)
+roc_svm_lin <- roc(svm_lin_res$class, svm_lin_res$.pred_p)
+roc_logit <- roc(logit_res$class, logit_res$.pred_p)
+roc_tree <- roc(tree_res$class, tree_res$.pred_p)
+roc_rf <- roc(rf_res$class, rf_res$.pred_p)
+roc_boost <- roc(boost_res$class, boost_res$.pred_p)
+
+ggroc(list(svm_lin = roc_svm_lin,
+           knn = roc_knn, lda = roc_lda,
+           qda = roc_qda, logit = roc_logit,
+           tree = roc_tree, rf = roc_rf,
+           boost = roc_boost)) +
+  geom_abline(slope = 1, intercept = 1, linetype = "dashed", col = "white") +
+  ggtitle("Comparaison des courbes ROC") +
+  theme_bw() +
+    dark_mode(theme_minimal())
+
+```
+
+## Comparaison des F1-scores {.smaller}
+
+$$0< F_1\text{ - Score} = \frac{2}{\frac{1}{\text{Precision}}+{\frac{1}{\text{Rappel}}}} < 1$$
+
+```{r f1_tab}
+tab_F1 <-  as.data.frame.matrix(matrix(nrow = 8, ncol = 2))
+tab_F1[,2] <- c(F1_Score(tab_lda),F1_Score(tab_qda),F1_Score(tab_logit), 
+                F1_Score(tab_svm_lin),F1_Score(tab_knn),
+                F1_Score(tab_tree),F1_Score(tab_rf),F1_Score(tab_boost))
+colnames(tab_F1) <- c("Modèle","F1-Score")
+tab_F1[1] <- c("LDA","QDA","LOGIT","SVM","KNN","ARBRE","RF","BOOST")
+tab_F1[2] <- round(tab_F1[,2],3)
+
+tab_F1 |> 
+  kable()
+```
+
+- On choisit le **Boosting**
+
+
+## Optimisation du seuil
+
+Ce qui nous intéresse est plutôt d'éviter à nos cueilleurs l'intoxication, on recherche donc la $TER$ la plus "sûre" :
+
+$$P(class=\text{poisonous}|X=x)> z$$
+<hr>
+
+> Les modèles sont construits par défaut pour faire la plus petite erreur globale !
+
+Par défaut, $z = 0.5$, mais, si l'on veut avoir le **taux de vrais comestibles** le plus proche de 100%, on peut diminuer ce seuil !
+
+## Booster le Boosting {.smaller}
+
+Sélectionnons un seuil $z = 0.3$ :
+
+```{r boosty_boost}
+boost_res_seuil <- select_threshold(boost_res, 0.3)
+
+tab_boost_seuil <- boost_res_seuil |>
+  conf_mat(estimate = .pred_class, truth = class)
+```
+
+- **Accuracy** - $GA$ : `r round(global_accuracy(tab_boost_seuil)*100,2)` %
+- **Erreur globale** - $GE$ : `r round(global_error(tab_boost_seuil)*100,2)` %
+- **Taux de vrais comestibles** - $TER$ : `r round(true_edible_rate(tab_boost_seuil)*100,2)` %
+- **Taux de vrais toxiques** - $TPR$ : `r round(true_poisonous_rate(tab_boost_seuil)*100,2)` %
+
+- **Précision** - $P_e$ : `r round(precision_edible(tab_boost_seuil)*100,2)` %
+
+
+
