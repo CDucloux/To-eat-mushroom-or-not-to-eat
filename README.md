@@ -1,4 +1,4 @@
-# To eat mushroom or not to eat ?
+# To eat mushroom or not to eat ? 🍄
 
 Projet réalisé par *Guillaume Devant* et *Corentin Ducloux*
 
