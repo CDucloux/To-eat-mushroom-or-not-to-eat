@@ -11,7 +11,9 @@ Dans [*Hamlet*](https://en.wikipedia.org/wiki/Hamlet), *William Shakespeare* éc
 
 La question **To eat mushroom, or not to eat** est elle aussi synonyme de nombreuses interrogations...
 
-Nous allons tenter de classer avec précision les champignons comestibles et les champignons toxiques recensés dans la base [UCI Mushroom](https://archive.ics.uci.edu/ml/datasets/mushroom);
+Nous allons tenter de classer avec précision les champignons comestibles et les champignons toxiques recensés dans la base [UCI Mushroom](https://archive.ics.uci.edu/ml/datasets/mushroom).
+
+*Note* : La présentation sous forme de diapositives interactives est disponible ici : [Présentation `Reveal.js`](https://corentinducloux.fr/Reveal.js/Mushroom_presentation.html)
 
 ## :warning: Quelques précautions
 
@@ -36,6 +38,8 @@ Nous avons découvert plusieurs phénomènes intéressants :
 
 L'ensemble du travail a été réalisé avec les librairies `tidymodels` et `doParallel`.
 
+Nous avons utilisé les **8** modèles suivants : 
+
 - [x] Linear Discriminant Analysis
 - [x] Quadratic Discriminant Analysis
 - [x] Linear Support Vector Machine
@@ -44,3 +48,8 @@ L'ensemble du travail a été réalisé avec les librairies `tidymodels` et `doP
 - [x] Decision Tree
 - [x] Random Forest
 - [x] XGboost
+
+Parmi ces modèles, les méthodes d'**ensemble** et de **boosting** semblent être les plus performantes avec des erreurs globales de classement inférieures à 2% sur l'ensemble de test.
+
+- **Pour plus de détail, voir le fichier `pdf` avec l'ensemble des résultats disponible ici** : [lien pas encore implémenté]()
+
