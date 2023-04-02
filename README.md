@@ -34,6 +34,7 @@ Nous avons découvert plusieurs phénomènes intéressants :
 |  **p = rose** | **u = violet** |  **e = rouge** | **w = blanc** |
 | **y = jaune** |  **l = bleu**  | **o = orange** |  **k = noir** |
 
+
 ## :gear: Quel modèle choisir ?
 
 L'ensemble du travail a été réalisé avec les librairies `tidymodels` et `doParallel`.
