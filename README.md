@@ -51,5 +51,5 @@ Nous avons utilisé les **8** modèles suivants :
 
 Parmi ces modèles, les méthodes d'**ensemble** et de **boosting** semblent être les plus performantes avec des erreurs globales de classement inférieures à 2% sur l'ensemble de test.
 
-- **Pour plus de détail, voir le fichier `pdf` avec l'ensemble des résultats disponible ici** : [lien pas encore implémenté]()
+- **Pour plus de détail, voir le fichier `pdf` avec l'ensemble des résultats disponible ici** : [Mushroom Results](https://github.com/CDucloux/To-eat-mushroom-or-not-to-eat/blob/main/Mushroom_results.pdf)
 
