@@ -1,6 +1,6 @@
 # To eat mushroom or not to eat ? 🍄
 
-Projet réalisé par *Guillaume Devant* et *Corentin Ducloux*
+Projet réalisé par *Guillaume Devant* et *[Corentin DUCLOUX](https://github.com/CDucloux)*
 
 <img src="https://github.com/CDucloux/To-eat-mushroom-or-not-to-eat/blob/main/images/main_mushroom.png" width=18% height=18% align="right">
 
