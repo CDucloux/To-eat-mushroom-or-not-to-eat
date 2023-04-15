@@ -9,7 +9,7 @@ Projet réalisé par *[Guillaume DEVANT](https://github.com/devgui37)* et *[Core
 Dans [*Hamlet*](https://en.wikipedia.org/wiki/Hamlet), *William Shakespeare* écrivait : 
 > To be or not to be, that is the question.
 
-La question **To eat mushroom, or not to eat** est elle aussi synonyme de nombreuses interrogations...
+La question **To eat mushroom, or not to eat** suscite elle aussi de nombreuses interrogations...
 
 Nous allons tenter de classer avec précision les champignons comestibles et les champignons toxiques recensés dans la base [UCI Mushroom](https://archive.ics.uci.edu/ml/datasets/mushroom).
 
